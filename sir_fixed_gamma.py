@@ -14,7 +14,8 @@ from datetime import timedelta, datetime
 
 
 class SIR(object):
-    def __init__(self, country, N, modulator=5, length=14, incubation=5):
+    def __init__(self, province, country, N, modulator=5, startdate='', enddate='', length=14, incubation=5):
+        self.province = province
         self.country = country
         self.N=N
         #base datas: length of infection period, length of incubation period
@@ -26,26 +27,70 @@ class SIR(object):
         self.beta=0.1
 
         #data sets
-        df = pd.read_csv('time_series_2019-ncov-Confirmed.csv')
-        country_data = df[df['Country/Region'] == country]
+        #confirmed: all confirmed infection - terms in sir it is recovered+infected
+        #recovered+death: recovered for sir (sorry for the inhumanity of math)
+        df_confirmed = pd.read_csv('time_series_2019-ncov-Confirmed.csv')
+        df_recovered = pd.read_csv('time_series_2019-ncov-Recovered.csv')
+        df_deaths = pd.read_csv('time_series_2019-ncov-Deaths.csv')
+        #country_data = df[df['Country/Region'] == country]
+        province_used=True
+        country_data = df_confirmed.loc[(df_confirmed['Country/Region'] == country) & (df_confirmed['Province/State'] == province)]
+        rows=country_data.shape[0]
+        if rows==0:
+            province_used=False
+            country_data = df_confirmed.loc[df_confirmed['Country/Region'] == country]
+        
+        #search the first and last key of the data
         index=0
+        startkey=''
+        endkey=''
+        
         for key, value in country_data.iteritems(): 
             if index>3: #first 4 columns are: Province/State	Country/Region	Lat	Long
-                if int(value)>0:
-                    break
+                if key==startdate:
+                    startkey=key
+                if int(value)>0 and startkey=='':
+                    startkey=key
+                if key==enddate:
+                    endkey=key
             index+=1
-
-        self.original_data=country_data.iloc[0].loc[key:]
+        if endkey=='':
+            original_confirmed=country_data.loc[:,startkey:]
+            original_recovered=df_recovered.loc[(df_recovered['Country/Region'] == country) & 
+                                                     (df_recovered['Province/State'] == province) 
+                                                     if province_used else df_recovered['Country/Region'] == country,startkey:]
+            original_deaths=df_deaths.loc[(df_deaths['Country/Region'] == country) & 
+                                                     (df_deaths['Province/State'] == province) 
+                                                     if province_used else df_deaths['Country/Region'] == country,startkey:]
+        else:
+            original_confirmed=country_data.loc[:,startkey:endkey]
+            original_recovered=df_recovered.loc[(df_recovered['Country/Region'] == country) & 
+                                                     (df_recovered['Province/State'] == province) 
+                                                     if province_used else df_recovered['Country/Region'] == country,startkey:endkey]
+            original_deaths=df_deaths.loc[(df_deaths['Country/Region'] == country) & 
+                                                     (df_deaths['Province/State'] == province) 
+                                                     if province_used else df_deaths['Country/Region'] == country,startkey:endkey]
         #modulated data
+        self.mod_confirmed=[]
         self.mod_original=[]
         #modulated data+expected infected persons in incubation phase
         self.incubator=[]
+        self.indexes=[]
+        self.mod_recovered=[]
 
-        #self.incubator=self.original_data.values
+        #self.incubator=original_confirmed.values
         #dont want ndarray array
-        for existing in self.original_data.values:
-            self.mod_original.append(existing*self.modulator)
-            self.incubator.append(existing*self.modulator)
+        for index in range(original_recovered.shape[1]):
+            local_recovered=(original_recovered.iloc[0,index]+original_deaths.iloc[0,index])*self.modulator
+            local_confirmed=original_confirmed.iloc[0,index]*self.modulator
+            self.mod_recovered.append(local_recovered)
+            self.mod_confirmed.append(local_confirmed)
+            self.mod_original.append(local_confirmed-local_recovered)
+            self.incubator.append(0)
+            
+        for key, value in original_confirmed.iteritems():
+            self.indexes.append(key)
+                    
         #temporary sir data for incubation estimation
         self.sir_data=[]
         
@@ -63,7 +108,7 @@ class SIR(object):
         
         
         
-        #self.generate_incubator()
+    #TODO: should optimize
         
     def generate_incubator(self):
         lastvalue=self.sir_data[-1]
@@ -73,36 +118,33 @@ class SIR(object):
         for i in range(1,lastvalue+1):
             if i>lastvalue:
                 return
-            if i>self.mod_original[-1]:
-                while dataindex<len(self.mod_original) or i>self.sir_data[dataindex]:
+            if i>self.mod_confirmed[-1]:
+                while dataindex<len(self.mod_confirmed) or i>self.sir_data[dataindex]:
                     dataindex+=1
             else:
-                while i>self.mod_original[dataindex]:
+                while i>self.mod_confirmed[dataindex]:
                     dataindex+=1
             randomindex=max([0,int(round(dataindex-randomdata[i-1]))])
                     
-            for j in range (randomindex,min(len(self.incubator),dataindex)):
+            for j in range (randomindex,len(self.incubator)):
                 self.incubator[j]+=1
-        #for existing in self.original_data:
-            
-        
+        for i in range(len(self.incubator)) :
+            self.incubator[i]=self.incubator[i]-self.mod_recovered[i]
                         
     #originally for the x axis, is not used this functionality, but some usefull things remained here
     def generate_x_data(self, add_size):
-        list=[]
-        self.first_detection=self.original_data.index[0]
-        for existing in self.original_data.index.values:
-            current = datetime.strptime(existing, '%m/%d/%y')
-            list.append(datetime.strftime(current, '%m/%d/%y'))
+        self.first_detection=self.indexes[0]
+        loclist=self.indexes.copy()
             
-        current = datetime.strptime(self.original_data.index[-1], '%m/%d/%y')
+        current = datetime.strptime(self.indexes[-1], '%m/%d/%y')
         today_value=current + timedelta(days=1)
-        self.today="day {}., date: {}".format(len(list),datetime.strftime(today_value, '%m/%d/%y'))
-        new_size=len(list)+add_size
-        while len(list) < new_size:
+        self.today="day {}., date: {}".format(len(loclist),datetime.strftime(today_value, '%m/%d/%y'))
+        new_size=len(loclist)+add_size
+        while len(loclist) < new_size:
             current = current + timedelta(days=1)
-            list.append(datetime.strftime(current, '%m/%d/%y'))
-        return list
+            loclist.append(datetime.strftime(current, '%m/%d/%y'))
+        return loclist
+    
     #solve SIR eqs
     def solve_eqs(self, size, data, beta, removed=0):
         def SIR(t, y):
@@ -112,47 +154,49 @@ class SIR(object):
         return solve_ivp(SIR, [0, size], [1-infected-removed,infected,removed], t_eval=np.arange(0, size, 1),method=self.ivp_method)
 
     #general prediction
-    def get_prediction(self, predict_len, data, beta, removed=0, full_len=True):
+    def get_prediction(self, predict_len, data, removed, beta, full_len=True):
         x_data = self.generate_x_data(predict_len)
         new_size=predict_len
         if (full_len):
             new_size = len(x_data)
-        prediction=self.solve_eqs(new_size, data, beta, removed)
+        prediction=self.solve_eqs(new_size, data, beta, removed[0]/self.N)
         
         return x_data,prediction.y[0],prediction.y[1],prediction.y[2]
         
     def get_raw_prediction(self, predict_len):
         
-        return self.get_prediction(predict_len, self.mod_original, self.beta)
+        return self.get_prediction(predict_len, self.mod_original, self.mod_recovered, self.beta)
 
     def get_incubation_prediction(self, predict_len):
-        return self.get_prediction(predict_len, self.incubator, self.beta)
+        return self.get_prediction(predict_len, self.incubator, self.mod_recovered, self.beta)
 
     def set_incubation(self):
         
         search_len=len(self.mod_original)+self.incubation*3
-        prediction=self.solve_eqs(search_len, self.mod_original, self.beta)
-        self.sir_data=np.round(prediction.y[1]*self.N).astype(int)
+        prediction=self.solve_eqs(search_len, self.mod_original, self.beta, self.mod_recovered[0]/self.N)
+        #sir buffer (for incubation) contains the expected confirmed (ie infected+recovered)
+        self.sir_data=np.round(prediction.y[1]*self.N+prediction.y[2]*self.N).astype(int)
         self.generate_incubator()
         
-    def calculate_failure(self, point, argdata):
-        solution = self.solve_eqs(len(argdata), argdata, point)
+    #TODO: optimization may use rdata (mod_solution[2]) too
+    def calculate_failure(self, beta, idata, rdata):
+        solution = self.solve_eqs(len(idata), idata, beta, rdata[0]/self.N)
         mod_solution = solution.y*self.N
-        rc=np.sqrt(np.mean((mod_solution[1] - argdata)**2))
+        rc=np.sqrt(np.mean((mod_solution[1] - idata)**2))
         return rc
-    def optimize(self, data):
-        best_solution = minimize(self.calculate_failure, x0=self.beta, args=data,
+    def optimize(self, idata, rdata):
+        best_solution = minimize(self.calculate_failure, x0=self.beta, args=(idata,rdata),
             method=self.minimize_method, bounds=[(0.0000001, 0.9)])
         self.beta = best_solution.x
         
     def train(self):
         #generate sir with incubation
-        self.optimize(self.mod_original)
+        self.optimize(self.mod_original,self.mod_recovered)
         self.set_incubation()
-        self.optimize(self.incubator)
+        self.optimize(self.incubator,self.mod_recovered)
     def raw_predict(self, predict_len):
             #'S': prediction.y[0]*self.N,
-        self.optimize(self.mod_original)
+        self.optimize(self.mod_original,self.mod_recovered)
         x_dates,prediction0,prediction1,prediction2 = self.get_raw_prediction(predict_len)
         real_data = np.concatenate((self.mod_original, [None] * predict_len))
         end_of_infected=prediction2[len(prediction2)-1];
@@ -166,8 +210,8 @@ class SIR(object):
         
         #ax.plot()
         
-        figure.savefig("{}_{}_{}_{}_raw.png".
-                       format(self.country,self.N,self.modulator,predict_len))
+        figure.savefig("{}_{}_{}_{}_{}_raw.png".
+                       format(self.province,self.country,self.N,self.modulator,predict_len))
     def mod_predict(self, predict_len, connection_divider=0):
         mod_beta=self.beta
         if connection_divider>0:
@@ -175,7 +219,9 @@ class SIR(object):
             
         data=[]
         data.append(self.mod_infected*self.N)
-        x_dates, prediction0,prediction1,prediction2 = self.get_prediction(predict_len, data, mod_beta, self.mod_removed,False)
+        rdata=[]
+        rdata.append(self.mod_removed*self.N)
+        x_dates, prediction0,prediction1,prediction2 = self.get_prediction(predict_len, data, rdata, mod_beta,False)
         end_of_infected=prediction2[len(prediction2)-1];
         real_data = np.concatenate((self.incubator, [None] * predict_len))
         
@@ -191,14 +237,14 @@ class SIR(object):
         axes.set_xlabel("time, first detection (day 0): {}, today: {}, expected infected: {}".format(self.first_detection, self.today, self.incubator[-1]))
         df.plot(ax=axes)
         
-        figure.savefig("{}_{}_{}_{}_div{}.png".
-                       format(self.country,self.N,self.modulator,predict_len,connection_divider))
+        figure.savefig("{}_{}_{}_{}_{}_div{}.png".
+                       format(self.province,self.country,self.N,self.modulator,predict_len,connection_divider))
         
     def predict(self, predict_len):
             #'S': prediction.y[0]*self.N,
         
         
-        x_dates,prediction0,prediction1,prediction2 = self.get_prediction(predict_len, self.incubator, self.beta)
+        x_dates,prediction0,prediction1,prediction2 = self.get_prediction(predict_len, self.incubator, self.mod_recovered, self.beta)
         
         real_data = np.concatenate((self.incubator, [None] * predict_len))
         end_of_infected=prediction2[len(prediction2)-1]; #removed end
@@ -219,14 +265,19 @@ class SIR(object):
         axes.set_xlabel("time, first detection (day 0): {}, today: {}, expected infected: {}".format(self.first_detection, self.today, self.incubator[-1]))
         df.plot(ax=axes)
         
-        figure.savefig(f"{self.country}_{self.N}_{self.modulator}_{predict_len}.png")
-        figure.savefig("{}_{}_{}_{}.png".
-                       format(self.country,self.N,self.modulator,predict_len))
+        figure.savefig("{}_{}_{}_{}_{}.png".
+                       format(self.province,self.country,self.N,self.modulator,predict_len))
 
-model=SIR('Italy', 60000000, 5)
+#model=SIR('Hubei','China', 10000000, 1, '2/22/20') #-> r~0,237
+#model=SIR('Hubei','China', 10000000, 1, '','2/22/20') #->r~2,87
+#model=SIR('','Italy', 60000000, 1) #->r~3,56
+#☺model=SIR('','Hungary', 10000000, 1) #->r~3,38
+model=SIR('','Hungary', 10000000, 5) #->r~3,51
 model.raw_predict(5)
 model.train()
 
 model.predict(5)
-model.predict(100)
-model.mod_predict(300,4)
+model.predict(200)
+model.mod_predict(400,2)
+model.mod_predict(400,3)
+model.mod_predict(400,4)
