@@ -11,9 +11,21 @@ from scipy.integrate import solve_ivp
 from scipy.optimize import minimize
 import matplotlib.pyplot as plt
 from datetime import timedelta, datetime
+import io
+import requests        
+
 
 
 class SIR(object):
+    def get_csv(self, data_type_name, isonline=True):
+        if isonline:
+            url="https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_{}_global.csv".format(data_type_name)
+            string_data=requests.get(url).content
+            return pd.read_csv(io.StringIO(string_data.decode('utf-8')))
+        else:
+            url="time_series_2019-ncov-{}.csv".format(data_type_name)
+            return pd.read_csv(url)
+        
     def __init__(self, province, country, N, modulator=5, startdate='', enddate='', length=14, incubation=5):
         self.province = province
         self.country = country
@@ -29,9 +41,11 @@ class SIR(object):
         #data sets
         #confirmed: all confirmed infection - terms in sir it is recovered+infected
         #recovered+death: recovered for sir (sorry for the inhumanity of math)
-        df_confirmed = pd.read_csv('time_series_2019-ncov-Confirmed.csv')
-        df_recovered = pd.read_csv('time_series_2019-ncov-Recovered.csv')
-        df_deaths = pd.read_csv('time_series_2019-ncov-Deaths.csv')
+
+        df_confirmed = self.get_csv("confirmed")
+        df_recovered = self.get_csv("recovered")
+        df_deaths = self.get_csv("deaths")
+
         #country_data = df[df['Country/Region'] == country]
         province_used=True
         country_data = df_confirmed.loc[(df_confirmed['Country/Region'] == country) & (df_confirmed['Province/State'] == province)]
@@ -268,11 +282,20 @@ class SIR(object):
         figure.savefig("{}_{}_{}_{}_{}.png".
                        format(self.province,self.country,self.N,self.modulator,predict_len))
 
-#model=SIR('Hubei','China', 10000000, 1, '2/22/20') #-> r~0,237
-#model=SIR('Hubei','China', 10000000, 1, '','2/22/20') #->r~2,87
+#model=SIR('Hubei','China', 36000000, 1, '2/22/20')
+#model=SIR('Hubei','China', 10000000, 1, '','2/22/20')
+model=SIR('Hubei','China', 10000000, 1, '2/5/20','2/15/20')
+#model=SIR('Hubei','China', 36000000, 1, '','2/6/20') #->r~2,87        
+#model=SIR('Hubei','China', 36000000, 1, '','2/15/20') #->r~2,3
 #model=SIR('','Italy', 60000000, 1) #->r~3,56
-#☺model=SIR('','Hungary', 10000000, 1) #->r~3,38
-model=SIR('','Hungary', 10000000, 5) #->r~3,51
+#model=SIR('','Hungary', 10000000, 1) #->r~3,38
+#model=SIR('','Hungary', 10000000, 1,'3/19/20')
+#model=SIR('','Italy', 60000000, 1,'3/19/20')
+#model=SIR('','Italy', 60000000, 1,'2/20/20','3/3/20')
+#model=SIR('','Hungary', 10000000, 5)
+#model=SIR('','Hungary', 10000000, 1,'3/4/20','3/15/20')
+#model=SIR('','Hungary', 10000000, 1,'3/19/20') 
+        
 model.raw_predict(5)
 model.train()
 
